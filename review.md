@@ -25,6 +25,12 @@ whether there are other indicators in causal inference
 
 https://daiwk.github.io/assets/matrix+vector+derivatives+for+machine+learning.pdf
 
-SherylHYX
-
 ### https://github.com/usail-hkust/Awesome-Causality-Inspired-GNNs?tab=readme-ov-file
+
+
+
+
+# Nov 5th
+
+Following the REINFORCE paper, I attempted a reproduction using the MUTAG dataset. Data is first preprocessed, and then a GNN is employed to obtain trained parameters.
+
