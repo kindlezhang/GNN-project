@@ -13,10 +13,12 @@ import numpy as np
 import sklearn.preprocessing as preprocessing
 from torch_geometric.data import InMemoryDataset, download_url, extract_zip, Data
 
+# make sure there is no processed data before processing
+# rm -rf ./Data/Mutagenicity/processed
 
 class Mutagenicity(InMemoryDataset):
 
-    url = ('https://ls11-www.cs.tu-dortmund.de/people/morris/graphkerneldatasets/Mutagenicity.zip')
+    url = ('https://www.chrsmrrs.com/graphkerneldatasets/Mutagenicity.zip')
 
     splits = ['training', 'evaluation', 'testing']
 
@@ -27,7 +29,12 @@ class Mutagenicity(InMemoryDataset):
         super(Mutagenicity, self).__init__(root, transform, pre_transform, pre_filter)
 
         idx = self.processed_file_names.index('{}.pt'.format(mode))
-        self.data, self.slices = torch.load(self.processed_paths[idx])
+        try:
+            torch.serialization.add_safe_globals([Data])
+            self.data, self.slices = torch.load(self.processed_paths[idx])
+        except Exception as e:
+            print("Safe load failed, trying unsafe mode (trusted source assumed).")
+            self.data, self.slices = torch.load(self.processed_paths[idx], weights_only=False)
 
 
     @property
@@ -109,3 +116,9 @@ class Mutagenicity(InMemoryDataset):
         torch.save(self.collate(data_list[1000:]), self.processed_paths[0])
         torch.save(self.collate(data_list[500:1000]), self.processed_paths[1])
         torch.save(self.collate(data_list[:500]), self.processed_paths[2])
+
+if __name__ == '__main__':
+
+    dataset = Mutagenicity(root='./Data/Mutag')
+    print(dataset)
+    print(dataset[0])

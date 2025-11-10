@@ -3,6 +3,10 @@ import random
 import argparse
 import os
 import numpy as np
+
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -28,6 +32,7 @@ from module.data_loader_zoo.mutag_dataloader import Mutagenicity
 # print(torch_geometric.__file__)
 # print(torch.cuda.is_available())
 # print(torch.backends.mps.is_available())
+
 
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -56,8 +61,8 @@ def parse_args():
 
 class MutagNet(torch.nn.Module):
     '''Mutag GNN model.'''
-    def __init_(self, conv_unit=2):
-        super(MutagNet, self().__init__())
+    def __init__(self, conv_unit=2):
+        super(MutagNet, self).__init__()
 
         self.node_emb = nn.Linear(14, 32)
         self.edge_emb = Lin(3, 32)
@@ -112,89 +117,93 @@ class MutagNet(torch.nn.Module):
 if __name__ == '__main__':
 
     args = parse_args()
+    args.epoch = 5
+    args.data_path = "../../../Data/MUTAG"
+    args.model_path = "../../../params/"
+
     set_seed(0)
 
     test_dataset = Mutagenicity(args.data_path, mode='testing')
     val_dataset = Mutagenicity(args.data_path, mode='evaluation')
     train_dataset = Mutagenicity(args.data_path, mode='training')
-    if args.random_label:
-        for dataset in [test_dataset, val_dataset, train_dataset]:
-            for g in dataset:
-                g.y.fill_(random.choice([0, 1]))
+    # if args.random_label:
+    #     for dataset in [test_dataset, val_dataset, train_dataset]:
+    #         for g in dataset:
+    #             g.y.fill_(random.choice([0, 1]))
 
-    test_loader = DataLoader(test_dataset,
-                             batch_size=args.batch_size,
-                             shuffle=False
-                             )
-    val_loader = DataLoader(val_dataset,
-                            batch_size=args.batch_size,
-                            shuffle=False
-                            )
-    train_loader = DataLoader(train_dataset,
-                              batch_size=args.batch_size,
-                              shuffle=True
-                              )
-    model = MutagNet(args.num_unit).to(device)
+    # test_loader = DataLoader(test_dataset,
+    #                          batch_size=args.batch_size,
+    #                          shuffle=False
+    #                          )
+    # val_loader = DataLoader(val_dataset,
+    #                         batch_size=args.batch_size,
+    #                         shuffle=False
+    #                         )
+    # train_loader = DataLoader(train_dataset,
+    #                           batch_size=args.batch_size,
+    #                           shuffle=True
+    #                           )
+    # model = MutagNet(args.num_unit).to(device)
 
-    optimizer = torch.optim.Adam(model.parameters(),
-                                 lr=args.lr
-                                 )
-    scheduler = ReduceLROnPlateau(optimizer,
-                                  mode='min',
-                                  factor=0.8,
-                                  patience=10,
-                                  min_lr=1e-4
-                                  )
-    min_error = None
-    for epoch in range(1, args.epoch + 1):
+    # optimizer = torch.optim.Adam(model.parameters(),
+    #                              lr=args.lr
+    #                              )
+    # scheduler = ReduceLROnPlateau(optimizer,
+    #                               mode='min',
+    #                               factor=0.8,
+    #                               patience=10,
+    #                               min_lr=1e-4
+    #                               )
+    # min_error = None
+    # for epoch in range(1, args.epoch + 1):
 
-        t1 = time.time()
-        lr = scheduler.optimizer.param_groups[0]['lr']
+    #     t1 = time.time()
+    #     lr = scheduler.optimizer.param_groups[0]['lr']
 
-        loss = Gtrain(train_loader,
-                      model,
-                      optimizer,
-                      criterion=nn.CrossEntropyLoss()
-                      )
+    #     loss = Gtrain(train_loader,
+    #                   model,
+    #                   optimizer,
+    #                   criterion=nn.CrossEntropyLoss()
+    #                   )
 
-        _, train_acc = Gtest(train_loader,
-                             model,
-                             criterion=nn.CrossEntropyLoss()
-                             )
+    #     _, train_acc = Gtest(train_loader,
+    #                          model,
+    #                          criterion=nn.CrossEntropyLoss()
+    #                          )
 
-        val_error, val_acc = Gtest(val_loader,
-                                   model,
-                                   criterion=nn.CrossEntropyLoss()
-                                   )
-        test_error, test_acc = Gtest(test_loader,
-                                     model,
-                                     criterion=nn.CrossEntropyLoss()
-                                     )
-        scheduler.step(val_error)
-        if min_error is None or val_error <= min_error:
-            min_error = val_error
+    #     val_error, val_acc = Gtest(val_loader,
+    #                                model,
+    #                                criterion=nn.CrossEntropyLoss()
+    #                                )
+    #     test_error, test_acc = Gtest(test_loader,
+    #                                  model,
+    #                                  criterion=nn.CrossEntropyLoss()
+    #                                  )
+    #     scheduler.step(val_error)
+    #     if min_error is None or val_error <= min_error:
+    #         min_error = val_error
 
-        t2 = time.time()
+    #     t2 = time.time()
 
-        if epoch % args.verbose == 0:
-            test_error, test_acc = Gtest(test_loader,
-                                         model,
-                                         criterion=nn.CrossEntropyLoss()
-                                         )
-            t3 = time.time()
-            print('Epoch{:4d}[{:.3f}s]: LR: {:.5f}, Loss: {:.5f}, Test Loss: {:.5f}, '
-                  'Test acc: {:.5f}'.format(epoch, t3 - t1, lr, loss, test_error, test_acc))
-            continue
+    #     if epoch % args.verbose == 0:
+    #         test_error, test_acc = Gtest(test_loader,
+    #                                      model,
+    #                                      criterion=nn.CrossEntropyLoss()
+    #                                      )
+    #         t3 = time.time()
+    #         print('Epoch{:4d}[{:.3f}s]: LR: {:.5f}, Loss: {:.5f}, Test Loss: {:.5f}, '
+    #               'Test acc: {:.5f}'.format(epoch, t3 - t1, lr, loss, test_error, test_acc))
+    #         continue
 
-        print('Epoch{:4d}[{:.3f}s]: LR: {:.5f}, Loss: {:.5f}, Train acc: {:.5f}, Validation Loss: {:.5f}, '
-              'Validation acc: {:5f}'.format(epoch, t2 - t1, lr, loss, train_acc, val_error, val_acc))
+    #     print('Epoch{:4d}[{:.3f}s]: LR: {:.5f}, Loss: {:.5f}, Train acc: {:.5f}, Validation Loss: {:.5f}, '
+    #           'Validation acc: {:5f}'.format(epoch, t2 - t1, lr, loss, train_acc, val_error, val_acc))
 
-        torch.cuda.empty_cache()
-    if args.random_label:
-        save_path = 'mutag_net_rd.pt'
-    else:
-        save_path = 'mutag_net.pt'
-    torch.save(model, args.model_path + save_path)
+    #     torch.cuda.empty_cache()
+    # if args.random_label:
+    #     save_path = 'mutag_net_rd.pt'
+    # else:
+    #     save_path = 'mutag_net.pt'
+    # torch.save(model, args.model_path + save_path)
 
 #Epoch 299[2.636s]: LR: 0.00010, Loss: 0.27307, Train acc: 0.89032, Validation Loss: 0.46207, Validation acc: 0.822000
 # Epoch 300[2.543s]: LR: 0.00010, Loss: 0.27360, Test Loss: 0.41161, Test acc: 0.80600
