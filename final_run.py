@@ -1,0 +1,1 @@
+from module.gnn_model_zoo.mutag_gnn import MutagNet
