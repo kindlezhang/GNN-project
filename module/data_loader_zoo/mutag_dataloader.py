@@ -119,6 +119,6 @@ class Mutagenicity(InMemoryDataset):
 
 if __name__ == '__main__':
 
-    dataset = Mutagenicity(root='./Data/Mutag')
+    dataset = Mutagenicity(root='./Data/Mutag', mode='training')
     print(dataset)
     print(dataset[0])
