@@ -84,6 +84,12 @@ class MutagNet(torch.nn.Module):
         self.softmax = Softmax(dim=1)
 
     def forward(self, x, edge_index, edge_attr, batch):
+        
+        device = next(self.parameters()).device  # 自动检测模型设备
+        x, edge_index, edge_attr, batch = (
+            x.to(device), edge_index.to(device), edge_attr.to(device), batch.to(device)
+        )
+    
         node_x = self.get_node_reps(x, edge_index, edge_attr, batch)
         graph_x = global_mean_pool(node_x, batch)
         return self.get_pred(graph_x)

@@ -5,8 +5,10 @@ from torch_geometric.utils import softmax
 from torch_scatter import scatter_max
 from module.utils.reorganizer import relabel_graph, filter_correct_data
 import os.path as osp
+import torch
+# from module.gnn_model_zoo.mutag_gnn import MutagNet  
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("mps" if torch.backends.mps.is_available() else "cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 class RC_Explainer(torch.nn.Module):
@@ -262,18 +264,32 @@ class RC_Explainer_Batch_star(RC_Explainer_Batch):
 
         # assert len(ava_action_probs) == sum(~state)
 
-        added_action_probs, added_actions = scatter_max(ava_action_probs, ava_action_batch)
+        added_action_probs, added_actions = scatter_max(
+            ava_action_probs.cpu(),
+            ava_action_batch.cpu()
+        )
+        added_action_probs = added_action_probs.to(device)
+        added_actions = added_actions.to(device)
+
+        # added_action_probs, added_actions = scatter_max(ava_action_probs, ava_action_batch)
 
         if train_flag:
             rand_action_probs = torch.rand(ava_action_probs.size()).to(device)
-            _, rand_actions = scatter_max(rand_action_probs, ava_action_batch)
+            rand_actions_cpu, _ = scatter_max(rand_action_probs.cpu(), ava_action_batch.cpu())
+            rand_actions = rand_actions_cpu.to(rand_action_probs.device)
+            # _, rand_actions = scatter_max(rand_action_probs, ava_action_batch)
 
+            rand_actions = rand_actions.to(torch.long)
             return ava_action_probs, ava_action_probs[rand_actions], rand_actions, unique_batch
 
         return ava_action_probs, added_action_probs, added_actions, unique_batch
 
     def predict_star(self, graph_rep, subgraph_rep, ava_action_reps, target_y, ava_action_batch):
-        action_graph_reps = graph_rep - subgraph_rep
+        
+        subgraph_rep_expanded = torch.zeros_like(graph_rep)
+        subgraph_rep_expanded[unique_batch] = subgraph_rep
+        
+        action_graph_reps = graph_rep - subgraph_rep_expanded
         action_graph_reps = action_graph_reps[ava_action_batch]
         action_graph_reps = torch.cat([ava_action_reps, action_graph_reps], dim=1)
 
@@ -289,3 +305,25 @@ class RC_Explainer_Batch_star(RC_Explainer_Batch):
         # action_probs = softmax(action_probs, ava_action_batch)
         # action_probs = F.sigmoid(action_probs)
         return action_probs
+    
+
+if __name__ == "__main__":
+    # 1. 初始化基础模型（比如MutagNet）
+    model = MutagNet(2)
+    if torch.cuda.is_available():
+        model.load_state_dict(torch.load(path, map_location='cuda:0'))   
+    elif torch.backends.mps.is_available():
+        model.load_state_dict(torch.load(path, map_location='mps')) 
+    else:
+        model.load_state_dict(torch.load(path, map_location='cpu'))
+
+    # 2. 实例化 RC_Explainer
+    explainer = RC_Explainer(
+        _model=model,
+        _num_labels=2,        # 分类数
+        _hidden_size=64,      # 隐藏层维度
+        _use_edge_attr=False  # 是否使用边特征
+    )
+
+    # 3. 测试 forward（可选）
+    print(explainer)
