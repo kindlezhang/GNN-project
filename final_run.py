@@ -155,9 +155,9 @@ if __name__ == '__main__':
                      debias_flag=debias_flag, topN=topN, batch_size=batch_size, reward_mode=reward_mode,
                      save_model_path=save_model_path)
 
-    # logger = open('explainer_output/%s_output_new.log' % dataset_name, 'a')
-    # logger.write('Reward-Mode: %s, lr: %s, l2: %s\n' % (reward_mode, str(lr), str(weight_decay)))
-    # logger.write('ACC-AUC: %.4f, P@5: %.4f, R@5: %.4f\n' % (best_acc_auc, best_pre, best_rec))
-    # logger.write('ACC-Curves: %s\n\n' % best_acc_curve)
-    # logger.close()
+    logger = open('explainer_output/%s_output_new.log' % dataset_name, 'a')
+    logger.write('Reward-Mode: %s, lr: %s, l2: %s\n' % (reward_mode, str(lr), str(weight_decay)))
+    logger.write('ACC-AUC: %.4f, P@5: %.4f, R@5: %.4f\n' % (best_acc_auc, best_pre, best_rec))
+    logger.write('ACC-Curves: %s\n\n' % best_acc_curve)
+    logger.close()
 

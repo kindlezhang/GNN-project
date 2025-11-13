@@ -260,7 +260,7 @@ class RC_Explainer_Batch_star(RC_Explainer_Batch):
         # get the unique elements in batch, in cases where some batches are out of actions.
         unique_batch, ava_action_batch = torch.unique(ava_action_batch, return_inverse=True)
 
-        ava_action_probs = self.predict_star(graph_rep, subgraph_rep, ava_action_reps, ava_y_batch, ava_action_batch)
+        ava_action_probs = self.predict_star(graph_rep, subgraph_rep, ava_action_reps, ava_y_batch, ava_action_batch, unique_batch)
 
         # assert len(ava_action_probs) == sum(~state)
 
@@ -284,11 +284,12 @@ class RC_Explainer_Batch_star(RC_Explainer_Batch):
 
         return ava_action_probs, added_action_probs, added_actions, unique_batch
 
-    def predict_star(self, graph_rep, subgraph_rep, ava_action_reps, target_y, ava_action_batch):
+    def predict_star(self, graph_rep, subgraph_rep, ava_action_reps, target_y, ava_action_batch, unique_batch):
         
         subgraph_rep_expanded = torch.zeros_like(graph_rep)
-        subgraph_rep_expanded[unique_batch] = subgraph_rep
+        subgraph_rep_expanded[unique_batch[:subgraph_rep.size(0)]] = subgraph_rep
         
+        ava_action_batch = ava_action_batch.to(torch.long)
         action_graph_reps = graph_rep - subgraph_rep_expanded
         action_graph_reps = action_graph_reps[ava_action_batch]
         action_graph_reps = torch.cat([ava_action_reps, action_graph_reps], dim=1)
