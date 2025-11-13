@@ -131,6 +131,8 @@ if __name__ == '__main__':
     set_seed(0)
 
     test_dataset = Mutagenicity(args.data_path, mode='testing')
+    # test_dataset[0]
+    # Data(x=[24, 14], edge_index=[2, 46], edge_attr=[46, 3], y=[1], z=[24], name='mutag_1123', idx=[1])
     val_dataset = Mutagenicity(args.data_path, mode='evaluation')
     train_dataset = Mutagenicity(args.data_path, mode='training')
     if args.random_label:

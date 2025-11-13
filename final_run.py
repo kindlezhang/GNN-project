@@ -107,9 +107,19 @@ if __name__ == '__main__':
     # if torch.cuda.is_available():
     #     model = torch.load(path, map_location=lambda storage, loc: storage.cuda(0))
     # elif torch.backends.mps.is_available():
-    #     model = torch.load(path, map_location=lambda storage, loc: storage.mps())
+    #     model = torch.load(path, map_location=torch.device('mps'))
     # else:
     #     model = torch.load(path, map_location=torch.device('cpu'))
+    # model.eval()
+
+    # if torch.cuda.is_available():
+    #     model_1 = torch.load(path, map_location=lambda storage, loc: storage.cuda(0))
+    # elif torch.backends.mps.is_available():
+    #     model_1 = torch.load(path, map_location=torch.device('mps'))
+    # else:
+    #     model_1 = torch.load(path, map_location=torch.device('cpu'))
+    # model_1.eval()
+
     model = MutagNet(2)
     if torch.cuda.is_available():
         model.load_state_dict(torch.load(path, map_location='cuda:0'))   
@@ -150,6 +160,7 @@ if __name__ == '__main__':
     topK_ratio = configs['topK_ratio']
 
     save_model_path = 'explainer_params/%s_%s_%s_%s_new.pt' % (dataset_name, reward_mode, str(lr), str(weight_decay))
+    
     rc_explainer, best_acc_auc, best_acc_curve, best_pre, best_rec = \
         train_policy(rc_explainer, model, train_loader, test_loader, optimizer, topK_ratio,
                      debias_flag=debias_flag, topN=topN, batch_size=batch_size, reward_mode=reward_mode,
