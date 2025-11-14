@@ -112,8 +112,8 @@ def train_policy(rc_explainer, model, train_loader, test_loader, optimizer,
     previous_baseline_list = []
     current_baseline_list = []
     while ep < num_episodes:
-        rc_explainer.train()
-        model.eval()
+        rc_explainer.train() # need dropout and batchnorm
+        model.eval() # no need
 
         loss = 0.
         avg_reward = []
@@ -123,6 +123,7 @@ def train_policy(rc_explainer, model, train_loader, test_loader, optimizer,
 
         for graph in tqdm(iter(train_loader), total=len(train_loader)):
             graph = graph.to(device)
+            # DataBatch(x=[2131, 14], edge_index=[2, 4164], edge_attr=[4164, 3], y=[64], z=[64], name=[64], idx=[64], batch=[2131], ptr=[65])
 
             if topK_ratio < 1:
                 valid_budget = max(int(topK_ratio * graph.num_edges / batch_size), 1)
@@ -133,14 +134,19 @@ def train_policy(rc_explainer, model, train_loader, test_loader, optimizer,
 
             full_subgraph_pred = F.softmax(model(graph.x, graph.edge_index,
                                                  graph.edge_attr, graph.batch)).detach()
+            # full_subgraph_pred.shape = [num_graphs_in_batch, 2]
+            # as the baseline prediction for reward calculation.
+            # no need to detach here, since the model is in eval mode.
 
             current_state = torch.zeros(graph.num_edges, dtype=torch.bool)
+            # initialize the state for each edge in the batch
 
             if debias_flag:
                 pred_bias_list = bias_detector(model, graph, valid_budget)
 
             pre_reward = torch.zeros(graph.y.size()).to(device)
             # pre_reward = 0.
+
             num_beam = 8
             for budget in range(valid_budget):
                 available_action = current_state[~current_state].clone()
@@ -153,16 +159,20 @@ def train_policy(rc_explainer, model, train_loader, test_loader, optimizer,
                 for beam in range(num_beam):
                     beam_available_action = current_state[~current_state].clone()
                     beam_new_state = current_state.clone()
-                    if beam == 0:
+                    if beam == 0: # if it's the first step
                         _, added_action_probs, added_actions, unique_batch = rc_explainer(graph, current_state, train_flag=False)
+                        # import part here
                     else:
                         _, added_action_probs, added_actions, unique_batch = rc_explainer(graph, current_state, train_flag=True)
 
                     beam_available_action[added_actions] = True
+                    # which edges are selected in this beam
 
                     beam_new_state[~current_state] = beam_available_action
+                    # update the new state with the selected edges
 
                     new_subgraph = relabel_graph(graph, beam_new_state)
+                    # construct the subgraph according to the new state
                     new_subgraph_pred = model(new_subgraph.x, new_subgraph.edge_index,
                                               new_subgraph.edge_attr, new_subgraph.batch)
 
