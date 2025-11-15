@@ -11,7 +11,9 @@ from module.utils.parser import parse_args
 # from module.utils.logging import Logger
 
 from rc_explainer_pool import RC_Explainer, RC_Explainer_pro, RC_Explainer_Batch, RC_Explainer_Batch_star
-from train_test_pool_batch3 import train_policy
+# from train_test_pool_batch3 import train_policy
+# from train_test_pool_batch4 import train_policy_mcts_ppo
+from train_test_pool_batch5 import train_policy_mcts_ppo
 
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -49,7 +51,7 @@ def configuration(dataset_name):
         configs['_num_labels'] = 2
         configs['debias_flag'] = False
         configs['topN'] = None
-        configs['batch_size'] = 64
+        configs['batch_size'] = 1
         configs['scope'] = 'all'
 
         configs['train_dataset'] = Mutagenicity('Data/MUTAG', mode='training')
@@ -161,10 +163,21 @@ if __name__ == '__main__':
 
     save_model_path = 'explainer_params/%s_%s_%s_%s_new.pt' % (dataset_name, reward_mode, str(lr), str(weight_decay))
     
+    # rc_explainer, best_acc_auc, best_acc_curve, best_pre, best_rec = \
+    #     train_policy(rc_explainer, model, train_loader, test_loader, optimizer, topK_ratio,
+    #                  debias_flag=debias_flag, topN=topN, batch_size=batch_size, reward_mode=reward_mode,
+    #                  save_model_path=save_model_path)
+
+    # rc_explainer, best_acc_auc, best_acc_curve, best_pre, best_rec = \
+    #     train_policy_mcts_ppo(rc_explainer, model, train_loader, test_loader, optimizer, topK_ratio,
+    #                  debias_flag=debias_flag, topN=topN,
+    #                  num_episodes=30, num_simulations=20, c_ucb=1.0, clip_ratio=0.2, gamma=0.97)
+
     rc_explainer, best_acc_auc, best_acc_curve, best_pre, best_rec = \
-        train_policy(rc_explainer, model, train_loader, test_loader, optimizer, topK_ratio,
-                     debias_flag=debias_flag, topN=topN, batch_size=batch_size, reward_mode=reward_mode,
-                     save_model_path=save_model_path)
+        train_policy_mcts_ppo(rc_explainer, model, train_loader, test_loader, optimizer, topK_ratio,
+                     debias_flag=debias_flag, topN=topN,
+                     num_epochs=30, num_simulations=20, c_puct=1.0, clip_ratio=0.2, gamma=0.97, 
+                     rollout_limit = None,ppo_epochs=4)
 
     logger = open('explainer_output/%s_output_new.log' % dataset_name, 'a')
     logger.write('Reward-Mode: %s, lr: %s, l2: %s\n' % (reward_mode, str(lr), str(weight_decay)))
