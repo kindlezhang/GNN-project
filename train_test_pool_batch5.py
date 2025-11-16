@@ -56,11 +56,12 @@ def rollout_policy(node, graph, rc_explainer, model, max_budget, debias_flag=Fal
             out = rc_explainer(graph, state, train_flag=False)
         # Try to find action logits in returned tuple
         # Common shape: action_logits shape [num_available_actions] or [num_edges]
-        if len(out) >= 2:
-            policy_logits = out[1]
-        else:
-            # fallback - assume rc_explainer returns only probs over edges
-            policy_logits = out[0]
+        # if len(out) >= 2:
+        #     policy_logits = out[1]
+        # else:
+        #     # fallback - assume rc_explainer returns only probs over edges
+        #     policy_logits = out[0]
+        policy_logits = out[0]
         # if policy_logits only returns scores for available actions or for all edges, index accordingly
         if policy_logits.shape[0] == graph.num_edges:
             probs = F.softmax(policy_logits, dim=0)
@@ -110,10 +111,11 @@ def mcts_search(root_state, graph, rc_explainer, model, max_budget, num_simulati
     # optionally cache root priors once
     with torch.no_grad():
         out = rc_explainer(graph, root.state, train_flag=False)
-    if len(out) >= 2:
-        root_policy_logits = out[1]
-    else:
-        root_policy_logits = out[0]
+    # if len(out) >= 2:
+    #     root_policy_logits = out[1]
+    # else:
+    #     root_policy_logits = out[0]
+    root_policy_logits = out[0]
     # For speed we won't store per-action priors on root unless needed; priors will be fetched on expand
 
     # print("root_state sum:", root_state.sum().item())
@@ -151,10 +153,11 @@ def mcts_search(root_state, graph, rc_explainer, model, max_budget, num_simulati
                 # get priors for this node via policy
                 with torch.no_grad():
                     out = rc_explainer(graph, node.state, train_flag=False)
-                if len(out) >= 2:
-                    policy_logits = out[1]
-                else:
-                    policy_logits = out[0]
+                # if len(out) >= 2:
+                #     policy_logits = out[1]
+                # else:
+                #     policy_logits = out[0]
+                policy_logits = out[0]
                 # if logits for all edges
                 if policy_logits.shape[0] == graph.num_edges:
                     probs_all = F.softmax(policy_logits, dim=0)
@@ -193,7 +196,8 @@ def mcts_search(root_state, graph, rc_explainer, model, max_budget, num_simulati
         # fallback to policy argmax
         with torch.no_grad():
             out = rc_explainer(graph, root.state, train_flag=False)
-        policy_logits = out[1] if len(out) >= 2 else out[0]
+        # policy_logits = out[1] if len(out) >= 2 else out[0]
+        policy_logits = out[0]
         action = int(torch.argmax(policy_logits).item())
         visit_dist = None
     else:
@@ -418,3 +422,56 @@ def bias_detector(model, graph, valid_budget):
         pred_bias_list.append(i_pred_bias)
 
     return pred_bias_list
+
+def test_policy_all_with_gnd(rc_explainer, model, test_loader, topN=None):
+    rc_explainer.eval()
+    model.eval()
+
+    topK_ratio_list = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+    acc_count_list = np.zeros(len(topK_ratio_list))
+
+    precision_topN_count = 0.
+    recall_topN_count = 0.
+
+    with torch.no_grad():
+        for graph in iter(test_loader):
+            graph = graph.to(device)
+            max_budget = graph.num_edges
+            state = torch.zeros(max_budget, dtype=torch.bool)
+
+            check_budget_list = [max(int(_topK * max_budget), 1) for _topK in topK_ratio_list]
+            valid_budget = max(int(0.9 * max_budget), 1)
+
+            for budget in range(valid_budget):
+                available_actions = state[~state].clone()
+
+                _, _, make_action_id, _ = rc_explainer(graph=graph, state=state, train_flag=False)
+
+                available_actions[make_action_id] = True
+                state[~state] = available_actions.clone()
+
+                if (budget + 1) in check_budget_list:
+                    check_idx = check_budget_list.index(budget + 1)
+                    subgraph = relabel_graph(graph, state)
+                    subgraph_pred = model(subgraph.x, subgraph.edge_index, subgraph.edge_attr, subgraph.batch)
+
+                    acc_count_list[check_idx] += sum(graph.y == subgraph_pred.argmax(dim=1))
+
+                if topN is not None and budget == topN - 1:
+                    precision_topN_count += torch.sum(state*graph.ground_truth_mask[0])/topN
+                    recall_topN_count += torch.sum(state*graph.ground_truth_mask[0])/sum(graph.ground_truth_mask[0])
+
+    acc_count_list[-1] = len(test_loader)
+    acc_count_list = np.array(acc_count_list)/len(test_loader)
+
+    precision_topN_count = precision_topN_count / len(test_loader)
+    recall_topN_count = recall_topN_count / len(test_loader)
+
+    if topN is not None:
+        print('\nACC-AUC: %.4f, Precision@5: %.4f, Recall@5: %.4f' %
+              (acc_count_list.mean(), precision_topN_count, recall_topN_count))
+    else:
+        print('\nACC-AUC: %.4f' % acc_count_list.mean())
+    print(acc_count_list)
+
+    return acc_count_list.mean(), acc_count_list, precision_topN_count, recall_topN_count

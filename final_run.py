@@ -14,6 +14,7 @@ from rc_explainer_pool import RC_Explainer, RC_Explainer_pro, RC_Explainer_Batch
 # from train_test_pool_batch3 import train_policy
 # from train_test_pool_batch4 import train_policy_mcts_ppo
 from train_test_pool_batch5 import train_policy_mcts_ppo
+# from train_test_pool_batch6 import train_policy_mcts_ppo
 
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -175,7 +176,7 @@ if __name__ == '__main__':
 
     rc_explainer, best_acc_auc, best_acc_curve, best_pre, best_rec = \
         train_policy_mcts_ppo(rc_explainer, model, train_loader, test_loader, optimizer, topK_ratio,
-                     debias_flag=debias_flag, topN=topN,
+                     debias_flag=debias_flag, topN=topN, 
                      num_epochs=30, num_simulations=20, c_puct=1.0, clip_ratio=0.2, gamma=0.97, 
                      rollout_limit = None,ppo_epochs=4)
 
