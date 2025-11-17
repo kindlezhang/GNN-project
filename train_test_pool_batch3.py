@@ -225,6 +225,7 @@ def train_policy(rc_explainer, model, train_loader, test_loader, optimizer,
 
                 beam_action_probs_list = F.softmax(beam_action_probs_list, dim=1)
                 batch_loss += torch.mean(- torch.log(beam_action_probs_list + EPS) * beam_reward_list)
+                # ！！！REINFORCE loss
 
                 max_reward, max_reward_idx = torch.max(beam_reward_list, dim=1)
                 max_actions = beam_action_list[range(beam_action_list.size()[0]), max_reward_idx]
@@ -266,13 +267,12 @@ def train_policy(rc_explainer, model, train_loader, test_loader, optimizer,
 
 def get_reward(full_subgraph_pred, new_subgraph_pred, target_y, pre_reward, mode='mutual_info'):
     if mode in ['mutual_info']:
+        # KL divergence
         reward = torch.sum(full_subgraph_pred * torch.log(new_subgraph_pred + EPS), dim=1)
-        reward += 2 * (target_y == new_subgraph_pred.argmax(dim=1)).float() - 1.
+        reward += 2 * (target_y == new_subgraph_pred.argmax(dim=1).to(device)).float() - 1.
 
     elif mode in ['binary']:
-        target_y = target_y.to(device)
-        new_subgraph_pred = new_subgraph_pred.to(device)
-        reward = (target_y == new_subgraph_pred.argmax(dim=1)).float()
+        reward = (target_y == new_subgraph_pred.argmax(dim=1).to(device)).float()
         reward = 2. * reward - 1.
 
     elif mode in ['cross_entropy']:
