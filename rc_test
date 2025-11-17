@@ -1,0 +1,39 @@
+import torch
+from torch import nn
+from torch_geometric.data import Data
+from torch_geometric.utils import to_undirected
+from torch_scatter import scatter_mean
+import torch_scatter
+
+device = torch.device("mps" if torch.backends.mps.is_available() else 
+                      "cuda:0" if torch.cuda.is_available() else "cpu")
+
+
+class ToyGNN(nn.Module):
+    def __init__(self, hidden=64):
+        super().__init__()
+        self.hidden = hidden
+        
+        # 节点编码 MLP
+        self.node_mlp = nn.Sequential(
+            nn.Linear(5, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, hidden)
+        )
+        
+        # 图编码 MLP
+        self.graph_mlp = nn.Sequential(
+            nn.Linear(hidden, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, hidden)
+        )
+
+    def get_node_reps(self, x, edge_index, edge_attr, batch):
+        # 实际的 GNN 会用 edge_index 聚合邻居
+        # toy 版本直接做 MLP
+        return self.node_mlp(x)
+
+    def get_graph_rep(self, x, edge_index, edge_attr, batch):
+        node_reps = self.get_node_reps(x, edge_index, edge_attr, batch)
+        graph_rep = torch_scatter.scatter_mean(node_reps, batch, dim=0)
+        return graph_rep

@@ -231,6 +231,7 @@ class RC_Explainer_Batch_star(RC_Explainer_Batch):
 
     def forward(self, graph, state, train_flag=False):
         graph_rep = self.model.get_graph_rep(graph.x, graph.edge_index, graph.edge_attr, graph.batch)
+        # graph_rep.shape = (batch_size, hidden_size) 64,32
 
         if len(torch.where(state==True)[0]) == 0:
             subgraph_rep = torch.zeros(graph_rep.size()).to(device)
@@ -241,6 +242,7 @@ class RC_Explainer_Batch_star(RC_Explainer_Batch):
         ava_edge_index = graph.edge_index.T[~state].T
         ava_edge_attr = graph.edge_attr[~state]
         ava_node_reps = self.model.get_node_reps(graph.x, ava_edge_index, ava_edge_attr, graph.batch)
+        # 2131 * 32
 
         if self.use_edge_attr:
             ava_edge_reps = self.model.edge_emb(ava_edge_attr)
@@ -249,14 +251,18 @@ class RC_Explainer_Batch_star(RC_Explainer_Batch):
                                          ava_edge_reps], dim=1).to(device)
         else:
 
-            ava_action_reps = torch.cat([ava_node_reps[ava_edge_index[0]],
+            ava_action_reps = torch.cat([ava_node_reps[ava_edge_index[0]], 
                                          ava_node_reps[ava_edge_index[1]]], dim=1).to(device)
+            # 4164 * 64
 
         ava_action_reps = self.edge_action_rep_generator(ava_action_reps)
+        # 4164 * 32
 
-        ava_action_batch = graph.batch[ava_edge_index[0]]
+        # graph_batch: get the batch index for each node shape: 2131
+        ava_action_batch = graph.batch[ava_edge_index[0]] # 4164
         ava_y_batch = graph.y[ava_action_batch]
-
+        # 4164
+        
         # get the unique elements in batch, in cases where some batches are out of actions.
         unique_batch, ava_action_batch = torch.unique(ava_action_batch, return_inverse=True)
 
@@ -318,7 +324,7 @@ if __name__ == "__main__":
     else:
         model.load_state_dict(torch.load(path, map_location='cpu'))
 
-    # 2. 实例化 RC_Explainer
+    # 2. 实例化 RC_Explainer_batch_star
     explainer = RC_Explainer(
         _model=model,
         _num_labels=2,        # 分类数
