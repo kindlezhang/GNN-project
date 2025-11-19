@@ -11,7 +11,7 @@ import numpy as np
 from tqdm import tqdm
 from copy import deepcopy
 
-EPS = 1e-15
+EPS = 1
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda:0" if torch.cuda.is_available() else "cpu")
 
 # -----------------------------
@@ -19,7 +19,7 @@ device = torch.device("mps" if torch.backends.mps.is_available() else "cuda:0" i
 # -----------------------------
 
 class MCTSNode:
-    def __init__(self, state, parent=None):
+    def __init__(self, state, parent=None, edge_index=None):
         # state: torch.BoolTensor mask of shape [num_edges]
         self.state = state.clone().to(device)
         self.parent = parent
@@ -27,53 +27,192 @@ class MCTSNode:
         self.N = 0                # visit count
         self.W = 0.0              # total value
         self.Q = 0.0              # mean value = W/N
-        self.untried_actions = (~self.state).nonzero(as_tuple=False).flatten().tolist()
-
-    def is_fully_expanded(self):
-        return len(self.untried_actions) == 0
+        self.edge_index = edge_index  # 存储图的边信息
 
     def is_terminal(self, max_budget):
         return int(self.state.sum().item()) >= max_budget
+    
+    def get_available_actions(self):
+        """
+        当前节点的可选择动作（未被选择的边）
+        """
+        return (~self.state).nonzero(as_tuple=False).flatten().tolist()
+
+    def get_neighbor_actions(self):
+        """
+        返回当前已选边的邻接边（排除已选边），如果没有邻接边 fallback 全图未选边
+        """
+        available_actions = self.get_available_actions()
+
+        selected_edges = self.state.nonzero(as_tuple=False).flatten().tolist()
+        if len(selected_edges) == 0:
+            # 根节点没有已选边，返回所有未选边
+            return available_actions
+
+        if self.edge_index is None:
+            # 没有边信息，返回所有未选边
+            return available_actions
+
+        neighbor_edges = set()
+        for e in selected_edges:
+            nodes = self.edge_index[:, e].tolist()  # 当前边的两个节点
+            for n in nodes:
+                # 找所有与节点 n 相连的边
+                connected_edges = (self.edge_index[0] == n).nonzero(as_tuple=False).flatten().tolist()
+                connected_edges += (self.edge_index[1] == n).nonzero(as_tuple=False).flatten().tolist()
+                neighbor_edges.update(connected_edges)
+
+        # 去掉已选过的边
+        neighbor_edges = list(neighbor_edges - set(selected_edges))
+        # 只保留还未被选择的边
+        neighbor_edges = [e for e in neighbor_edges if e in available_actions]
+
+        if len(neighbor_edges) == 0:
+            # fallback 到全图未选边
+            neighbor_edges = available_actions
+        
+        return neighbor_edges
+
     
 # -----------------------------
 # Rollout (single-graph) - random playout to budget
 # -----------------------------
 
-def rollout_random(node_state, graph, model, max_budget):
+# def rollout_random(node_state, graph, model, max_budget):
+#     """
+#     node_state: torch.BoolTensor [num_edges] mask (single graph)
+#     graph_single: single graph object
+#     use_model_greedy: optional heuristic
+#     """
+#     state = node_state.clone()
+#     steps = 0
+#     chosen_edges = state.nonzero(as_tuple=False).flatten().tolist()  # 存储本次 rollout 选择的边
+
+#     while int(state.sum().item()) < max_budget:
+#         avail = (~state).nonzero(as_tuple=False).flatten()
+#         if len(avail) == 0:
+#             break
+
+#         # 随机选择一个边
+#         a = int(random.choice(avail.tolist()))
+#         state[a] = True
+#         chosen_edges.append(a)
+
+#         steps += 1
+
+#     # compute reward
+#     model.eval()
+#     subgraph = relabel_graph(graph, state)
+#     sub_pred = F.softmax(model(subgraph.x, subgraph.edge_index, subgraph.edge_attr, subgraph.batch).detach())
+#     full_pred = F.softmax(model(graph.x, graph.edge_index,
+#                                 graph.edge_attr, graph.batch).detach())
+#     reward_vec = get_reward(full_pred, sub_pred, graph.y, mode='mutual_info')
+#     reward = float(reward_vec.mean().item()) # 以免是多图
+
+#     # --- 打印 rollout 信息 ---
+#     print(f"Rollout chosen edges: {chosen_edges}, reward: {reward:.4f}")
+
+#     return reward
+
+def rollout_random(model, node_state, graph, max_budget, use_neighbor_expand=True):
     """
     node_state: torch.BoolTensor [num_edges] mask (single graph)
-    graph_single: single graph object
-    use_model_greedy: optional heuristic
+    graph: single graph object
+    use_neighbor_expand: bool, 是否优先选择邻接边
     """
     state = node_state.clone()
-    steps = 0
-    chosen_edges = state.nonzero(as_tuple=False).flatten().tolist()  # 存储本次 rollout 选择的边
+    chosen_edges = state.nonzero(as_tuple=False).flatten().tolist()
 
     while int(state.sum().item()) < max_budget:
-        avail = (~state).nonzero(as_tuple=False).flatten()
-        if len(avail) == 0:
+        # 可选择边
+        unselected = (~state).nonzero(as_tuple=False).flatten().tolist()
+        if len(unselected) == 0:
             break
 
-        # 随机选择一个边
-        a = int(random.choice(avail.tolist()))
+        # ----------- 邻居扩展逻辑 -----------
+        if use_neighbor_expand and len(chosen_edges) > 0:
+
+            neighbor_edges = set()
+
+            # 对每个已选边，找与其相邻的边
+            for e in chosen_edges:
+                # edge_index: [2, num_edges]
+                u, v = graph.edge_index[:, e].tolist()
+
+                # 找全部连接 u 或 v 的边
+                connected_u = (graph.edge_index[0] == u).nonzero(as_tuple=False).flatten().tolist()
+                connected_u += (graph.edge_index[1] == u).nonzero(as_tuple=False).flatten().tolist()
+
+                connected_v = (graph.edge_index[0] == v).nonzero(as_tuple=False).flatten().tolist()
+                connected_v += (graph.edge_index[1] == v).nonzero(as_tuple=False).flatten().tolist()
+
+                neighbor_edges.update(connected_u)
+                neighbor_edges.update(connected_v)
+
+            # 移除已选边 
+            neighbor_edges = neighbor_edges - set(chosen_edges)
+
+            # 仅保留未选边 
+            # neighbor_edges = neighbor_edges & set(unselected)
+
+            # 如果有邻居边，则只从邻居选择
+            if len(neighbor_edges) > 0:
+                avail = sorted(neighbor_edges)      # 排序可选，不排序也行
+            else:
+                avail = unselected                  # fallback：全部未选边
+        else:
+            avail = unselected
+
+        # ----------- 选择动作 -----------
+        a = random.choice(avail)
         state[a] = True
         chosen_edges.append(a)
 
-        steps += 1
 
-    # compute reward
+    # 计算 reward
     model.eval()
     subgraph = relabel_graph(graph, state)
-    sub_pred = F.softmax(model(subgraph.x, subgraph.edge_index, subgraph.edge_attr, subgraph.batch).detach())
-    full_pred = F.softmax(model(graph.x, graph.edge_index,
-                                graph.edge_attr, graph.batch).detach())
+    sub_pred = F.softmax(model(subgraph.x, subgraph.edge_index, subgraph.edge_attr, subgraph.batch).detach(),dim=-1)
+    full_pred = F.softmax(model(graph.x, graph.edge_index, graph.edge_attr, graph.batch).detach(),dim=-1)
     reward_vec = get_reward(full_pred, sub_pred, graph.y, mode='mutual_info')
-    reward = float(reward_vec.mean().item()) # 以免是多图
+    reward = float(reward_vec.mean().item())
 
-    # --- 打印 rollout 信息 ---
     print(f"Rollout chosen edges: {chosen_edges}, reward: {reward:.4f}")
-
     return reward
+
+
+def get_neighbor_edges(state, graph):
+    """
+    返回当前已选边的邻接边索引（未选的）
+    state: [num_edges] bool tensor, 已选边
+    graph.edge_index: [2, num_edges] tensor
+    """
+    num_edges = state.size(0)
+    selected_edges = state.nonzero(as_tuple=False).flatten()
+    
+    if len(selected_edges) == 0:
+        # 如果还没选任何边，随机选择任意未选边
+        return (~state).nonzero(as_tuple=False).flatten()
+
+    # 找出已选边涉及的节点
+    selected_nodes = torch.unique(graph.edge_index[:, selected_edges])
+    
+    # 所有未选边
+    avail_edges = (~state).nonzero(as_tuple=False).flatten()
+    if len(avail_edges) == 0:
+        return torch.tensor([], device=state.device, dtype=torch.long)
+
+    # 只保留至少有一个端点在 selected_nodes 的边
+    edge_nodes = graph.edge_index[:, avail_edges]  # [2, num_avail]
+    mask = (edge_nodes[0].unsqueeze(0) == selected_nodes.unsqueeze(1)).any(0) | \
+           (edge_nodes[1].unsqueeze(0) == selected_nodes.unsqueeze(1)).any(0)
+
+    neighbor_edges = avail_edges[mask]
+    if len(neighbor_edges) == 0:
+        # 如果没有邻接边可选，则退化为任意未选边
+        neighbor_edges = avail_edges
+
+    return neighbor_edges
 
 
 # -----------------------------
@@ -192,9 +331,111 @@ def rollout_random(node_state, graph, model, max_budget):
     return actions, dists
 
 
-def explain_graphs_with_mcts_single(graph, model, max_budget, num_simulations=200, c_uct=1.0, rollout_limit=None):
+# def explain_graphs_with_mcts_single(graph, model, max_budget, num_simulations=200, c_uct=1.0, rollout_limit=None, use_neighbor_expand=True):
+#     root_state = torch.zeros(graph.num_edges, dtype=torch.bool, device=device)
+#     root = MCTSNode(root_state, parent=None, edge_index=graph.edge_index)
+
+#     for sim in range(num_simulations):
+#         node = root
+#         path = [node]
+
+#         # -------- Root special handling --------
+#         if node.N == 0:
+#             # 第一次 simulation 扩展 root 所有 untried actions
+
+#             if use_neighbor_expand:
+#                 actions_to_expand = node.get_neighbor_actions()
+#             else:
+#                 actions_to_expand = node.untried_actions[:]
+
+#             for a in actions_to_expand:
+#                 child_state = node.state.clone()
+#                 child_state[a] = True
+#                 child = MCTSNode(child_state, parent=node)
+#                 node.children[a] = child
+#                 node.untried_actions.remove(a)
+#             # 从 root children 随机选择一个 child 进行 rollout
+#             a = random.choice(list(node.children.keys()))
+#             node = node.children[a]
+#             path.append(node)
+#             v = rollout_random(node.state, graph, model, max_budget=max_budget)
+#         else:
+#             # -------- Selection down the tree --------
+#             while node.children and not node.is_terminal(max_budget):
+#                 # UCT 选择最大 child
+#                 best_score = -1e9
+#                 best_child = None
+#                 for a, child in node.children.items():
+#                     score = child.Q + c_uct * math.sqrt(math.log(node.N) / (child.N + EPS))
+#                     if score > best_score:
+#                         best_score = score
+#                         best_child = child
+#                 if best_child is None:
+#                     break
+#                 node = best_child
+#                 path.append(node)
+
+#             # -------- Leaf node handling --------
+#             if not node.is_terminal(max_budget) and not node.children:
+#                 if node.N == 0:
+#                     # 新 leaf → rollout
+#                     v = rollout_random(node.state, graph, model, max_budget=max_budget)
+#                 else:
+#                     # 已访问 leaf → 扩展所有 untried actions，再随机 rollout
+#                     for a in node.untried_actions[:]:
+#                         child_state = node.state.clone()
+#                         child_state[a] = True
+#                         child = MCTSNode(child_state, parent=node)
+#                         node.children[a] = child
+#                         node.untried_actions.remove(a)
+#                     a = random.choice(list(node.children.keys()))
+#                     node = node.children[a]
+#                     path.append(node)
+#                     v = rollout_random(node.state, graph, model, max_budget=max_budget)
+#             else:
+#                 # terminal 节点
+#                 # 改一下
+#                 v = rollout_random(node.state, graph, model, max_budget=max_budget)
+
+#         # -------- Backpropagation --------
+#         for n in path:
+#             n.N += 1
+#             n.W += v
+#             n.Q = n.W / n.N
+        
+#         # -------- Print this simulation's chosen actions --------
+#         sim_actions = []
+#         for n in path[1:]:  # 跳过 root 节点
+#             for a, child in n.parent.children.items():
+#                 if child is n:
+#                     sim_actions.append(a)
+#                     break
+#         print(f"Simulation {sim+1}: path actions = {sim_actions}")
+
+#     # -------- Extract best subgraph --------
+#     selected_edges = []
+#     node = root
+#     while not node.is_terminal(max_budget) and node.children:
+#         a, node = max(node.children.items(), key=lambda x: x[1].Q)
+#         selected_edges.append(a)
+
+#     subgraph_mask = torch.zeros(graph.num_edges, dtype=torch.bool, device=device)
+#     subgraph_mask[selected_edges] = True
+#     subgraph = relabel_graph(graph, subgraph_mask)
+
+#     return selected_edges, subgraph
+
+
+
+def explain_graphs_with_mcts_single(graph, model, max_budget, num_simulations=200, 
+                                     c_uct=1.0, rollout_limit=None, use_neighbor_expand=True):
+    """
+    graph: single graph object
+    max_budget: int, 最大选边数
+    use_neighbor_expand: bool, 是否扩展邻接边
+    """
     root_state = torch.zeros(graph.num_edges, dtype=torch.bool, device=device)
-    root = MCTSNode(root_state, parent=None)
+    root = MCTSNode(root_state, parent=None, edge_index=graph.edge_index)
 
     for sim in range(num_simulations):
         node = root
@@ -202,65 +443,92 @@ def explain_graphs_with_mcts_single(graph, model, max_budget, num_simulations=20
 
         # -------- Root special handling --------
         if node.N == 0:
-            # 第一次 simulation 扩展 root 所有 untried actions
-            for a in node.untried_actions[:]:
+            # 扩展 root 所有未选边
+            all_edges = list(range(graph.num_edges))
+            for a in all_edges:
                 child_state = node.state.clone()
                 child_state[a] = True
-                child = MCTSNode(child_state, parent=node)
+                child = MCTSNode(child_state, parent=node, edge_index=node.edge_index)
                 node.children[a] = child
-                node.untried_actions.remove(a)
-            # 从 root children 随机选择一个 child 进行 rollout
+
+            # 随机选一个 child 做 rollout
             a = random.choice(list(node.children.keys()))
             node = node.children[a]
             path.append(node)
-            v = rollout_random(node.state, graph, model, max_budget=max_budget)
+            v = rollout_random(model, node.state, graph, max_budget=max_budget, use_neighbor_expand=use_neighbor_expand)
+
         else:
             # -------- Selection down the tree --------
             while node.children and not node.is_terminal(max_budget):
-                # UCT 选择最大 child
                 best_score = -1e9
                 best_child = None
+                pos = 0
                 for a, child in node.children.items():
                     score = child.Q + c_uct * math.sqrt(math.log(node.N) / (child.N + EPS))
+                    # print(a, score)
                     if score > best_score:
                         best_score = score
                         best_child = child
+                        pos = a
+                # print("best score:", best_score, "best child action:", pos)
                 if best_child is None:
                     break
+
                 node = best_child
                 path.append(node)
+            print(" Selected path actions:", node.N, node.Q, node.W)
 
             # -------- Leaf node handling --------
             if not node.is_terminal(max_budget) and not node.children:
+
+                # 第一次访问 leaf：直接 rollout
                 if node.N == 0:
-                    # 新 leaf → rollout
-                    v = rollout_random(node.state, graph, model, max_budget=max_budget)
+                    v = rollout_random(
+                        model, node.state, graph,
+                        max_budget=max_budget,
+                        use_neighbor_expand=use_neighbor_expand
+                    )
+                # 第二次访问 leaf：扩展邻居边（或 fallback）
                 else:
-                    # 已访问 leaf → 扩展所有 untried actions，再随机 rollout
-                    for a in node.untried_actions[:]:
+                    # 扩展邻接边或者 fallback
+                    if use_neighbor_expand:
+                        actions_to_expand = node.get_neighbor_actions()
+                    else:
+                        actions_to_expand = list(range(graph.num_edges))
+
+                    print(" Neighbor actions:", actions_to_expand)
+                
+                    # # 过滤掉已经选过的
+                    # selected_edges = node.state.nonzero(as_tuple=False).flatten().tolist()
+                    # actions_to_expand = [a for a in actions_to_expand if a not in selected_edges]
+
+                    # 扩展
+                    for a in actions_to_expand:
                         child_state = node.state.clone()
                         child_state[a] = True
-                        child = MCTSNode(child_state, parent=node)
-                        node.children[a] = child
-                        node.untried_actions.remove(a)
+                        child = MCTSNode(child_state, parent=node, edge_index=node.edge_index)
+                        node.children[a] = child    
+
+                    # 随机选择一个 child 做 rollout
                     a = random.choice(list(node.children.keys()))
+                    print(" Expanding leaf, chosen action:", a)
                     node = node.children[a]
                     path.append(node)
-                    v = rollout_random(node.state, graph, model, max_budget=max_budget)
+                    v = rollout_random(model, node.state, graph, max_budget=max_budget, use_neighbor_expand=use_neighbor_expand)
             else:
                 # terminal 节点
-                # 改一下
-                v = rollout_random(node.state, graph, model, max_budget=max_budget)
+                v = rollout_random(model, node.state, graph, max_budget=max_budget, use_neighbor_expand=use_neighbor_expand)
 
         # -------- Backpropagation --------
+        # print("backward")
         for n in path:
             n.N += 1
             n.W += v
             n.Q = n.W / n.N
-        
-        # -------- Print this simulation's chosen actions --------
+
+        # 打印本次 simulation 路径动作
         sim_actions = []
-        for n in path[1:]:  # 跳过 root 节点
+        for n in path[1:]:
             for a, child in n.parent.children.items():
                 if child is n:
                     sim_actions.append(a)
@@ -282,10 +550,8 @@ def explain_graphs_with_mcts_single(graph, model, max_budget, num_simulations=20
 
 
 
-
-
 def explain_graphs_with_mcts(train_loader, model, topK_ratio,batch_size,
-                              num_simulations=200, c_uct=1.0, rollout_limit=None):
+                              num_simulations=200, c_uct=1.0, rollout_limit=None, use_neighbor_expand=True):
     """
     对 train_loader 中的每个 graph 单独运行 MCTS，返回每个图的解释子图边索引和子图
     """
@@ -303,7 +569,8 @@ def explain_graphs_with_mcts(train_loader, model, topK_ratio,batch_size,
         selected_edges, subgraph = explain_graphs_with_mcts_single(graph, model, max_budget,
                                                                     num_simulations=num_simulations,
                                                                     c_uct=c_uct,
-                                                                    rollout_limit=rollout_limit)
+                                                                    rollout_limit=rollout_limit,
+                                                                    use_neighbor_expand=use_neighbor_expand)
         results.append({
             "graph": graph,
             "selected_edges": selected_edges,
@@ -311,6 +578,7 @@ def explain_graphs_with_mcts(train_loader, model, topK_ratio,batch_size,
         })
 
     return results
+
 def get_reward(full_subgraph_pred, new_subgraph_pred, target_y, mode='mutual_info'):
     """
     full_subgraph_pred, new_subgraph_pred: [num_graphs, num_classes] probability tensors

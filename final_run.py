@@ -181,7 +181,9 @@ if __name__ == '__main__':
     #                  num_epochs=30, num_simulations=20, c_puct=1.0, clip_ratio=0.2, gamma=0.97, 
     #                  rollout_limit = None,ppo_epochs=4)
 
-    selected_edges, subgraph = explain_graphs_with_mcts (train_loader, model, topK_ratio, batch_size, num_simulations=2000, c_uct=0.0001, rollout_limit=None)
+    # results = explain_graphs_with_mcts (train_loader, model, topK_ratio, batch_size, num_simulations=2000, c_uct=0.0001, rollout_limit=None, use_neighbor_expand=False)
+
+    results = explain_graphs_with_mcts (train_loader, model, topK_ratio, batch_size, num_simulations=200, c_uct=0.2, rollout_limit=None, use_neighbor_expand=True)
 
     logger = open('explainer_output/%s_output_new.log' % dataset_name, 'a')
     logger.write('Reward-Mode: %s, lr: %s, l2: %s\n' % (reward_mode, str(lr), str(weight_decay)))
