@@ -1,5 +1,7 @@
 from module.gnn_model_zoo.mutag_gnn import MutagNet
 from module.data_loader_zoo.mutag_dataloader import Mutagenicity
+import networkx as nx
+from torch_geometric.utils import to_networkx
 
 from torch_geometric.data import DataLoader
 
@@ -73,6 +75,143 @@ def configuration(dataset_name):
         configs['topK_ratio'] = 0.1
 
     return configs
+
+def visualize_interpretation(agent, loader, device, num_samples=5):
+    """
+    从 loader 中取几个图，运行 Agent，画出原图和被选中的子图
+    """
+    agent.actor.eval() # 切换到评估模式
+    
+    # 从 loader 中获取数据
+    iterator = iter(loader)
+    
+    for i in range(num_samples):
+        try:
+            data = next(iterator)
+        except StopIteration:
+            break
+            
+        data = data.to(device)
+        
+        # === 1. 运行 Agent 进行选边 (与训练逻辑一致) ===
+        num_edges = data.num_edges
+        current_mask = torch.zeros(num_edges, dtype=torch.bool).to(device)
+        
+        # 设定步数 (MUTAG 一般选 5-10 条边)
+        max_steps = 10 
+        
+        print(f"\nSample {i+1}: Graph Label: {data.y.item()}")
+        
+        for t in range(max_steps):
+            # 预测
+            with torch.no_grad():
+                # 注意：take_action 内部可能有 sample，评估时你可能想要 deterministic (argmax)
+                # 但为了看 PPO 的行为，保持 sample 也可以，或者修改 take_action 支持 deterministic
+                action_idx = agent.take_action(data, current_mask)
+            
+            # 更新 Mask
+            current_mask[action_idx] = True
+            
+        # === 2. 打印选中的边 ===
+        selected_indices = torch.nonzero(current_mask).squeeze().cpu().numpy()
+        print(f"Selected Edge Indices: {selected_indices}")
+        
+        # === 3. 画图 ===
+        # 转换为 NetworkX 对象
+        G = to_networkx(data, to_undirected=True)
+        
+        # 设置布局
+        pos = nx.kamada_kawai_layout(G)
+        
+        plt.figure(figsize=(10, 5))
+        
+        # --- 左图：原始图 ---
+        plt.subplot(1, 2, 1)
+        plt.title("Original Graph")
+        nx.draw(G, pos, with_labels=True, node_color='lightblue', edge_color='gray', node_size=300)
+        
+        # --- 右图：解释子图 (高亮选中的边) ---
+        plt.subplot(1, 2, 2)
+        plt.title("Explained Subgraph (Red Edges)")
+        
+        # 先画所有节点和淡色的底边
+        nx.draw_networkx_nodes(G, pos, node_color='lightblue', node_size=300)
+        nx.draw_networkx_labels(G, pos)
+        nx.draw_networkx_edges(G, pos, edge_color='lightgray', alpha=0.5)
+        
+        # 再画选中的边 (红色，加粗)
+        # 注意：PyG 的边是双向的，NetworkX如果是无向图，需要处理一下索引映射
+        # 这里简化处理：将 PyG 选中的边转换为 (u, v) 元组列表
+        edge_index = data.edge_index.cpu().numpy()
+        selected_edges = []
+        
+        # 获取被选中边的 (u, v)
+        if selected_indices.ndim == 0: # 只选了一条边的情况
+             u, v = edge_index[0, selected_indices], edge_index[1, selected_indices]
+             selected_edges.append((u, v))
+        else:
+            for idx in selected_indices:
+                u, v = edge_index[0, idx], edge_index[1, idx]
+                selected_edges.append((u, v))
+        
+        # 在 NetworkX 图中高亮这些边
+        nx.draw_networkx_edges(G, pos, edgelist=selected_edges, edge_color='red', width=2.0)
+        
+        plt.show()
+
+
+        # ... (之前的训练代码) ...
+    
+    # 6. 绘图 (Loss/Return 曲线)
+    plt.plot(list(range(len(return_list))), return_list)
+    plt.xlabel('Episodes')
+    plt.ylabel('Returns')
+    plt.title('PPO Graph Explainer')
+    plt.show()
+    
+    # # === 新增：可视化结果 ===
+    # print("开始可视化解释结果...")
+    # # 使用 test_loader 查看测试集的效果
+    # visualize_interpretation(agent, test_loader, device, num_samples=3)
+
+
+
+def evaluate_fidelity(agent, loader, gnn_model, device):
+    agent.actor.eval()
+    gnn_model.eval()
+    
+    fidelity_scores = []
+    
+    for data in loader:
+        data = data.to(device)
+        num_edges = data.num_edges
+        current_mask = torch.zeros(num_edges, dtype=torch.bool).to(device)
+        
+        # 1. 原图预测概率
+        with torch.no_grad():
+            full_logits = gnn_model(data.x, data.edge_index, data.edge_attr, data.batch)
+            full_pred = full_logits.argmax(dim=1)
+            full_probs = F.softmax(full_logits, dim=1)
+            original_prob = full_probs[0, full_pred].item()
+        
+        # 2. 选边
+        for _ in range(10): # 假设选10步
+            with torch.no_grad():
+                 action = agent.take_action(data, current_mask)
+                 current_mask[action] = True
+        
+        # 3. 子图预测概率
+        subgraph = relabel_graph(data, current_mask)
+        with torch.no_grad():
+            sub_logits = gnn_model(subgraph.x, subgraph.edge_index, subgraph.edge_attr, subgraph.batch)
+            sub_probs = F.softmax(sub_logits, dim=1)
+            sub_prob = sub_probs[0, full_pred].item() # 看原预测类别的概率变化
+            
+        # Fidelity+ = 原图概率 - 子图概率 (越小越好，说明子图保留了原图的信息)
+        # 或者简单的：Accuracy Drop
+        fidelity_scores.append(original_prob - sub_prob)
+        
+    print(f"Average Fidelity Impact: {np.mean(fidelity_scores):.4f}")
 
 if __name__ == '__main__':
 
@@ -243,149 +382,28 @@ if __name__ == '__main__':
         print(f"Episode {i_episode}, Return: {episode_return:.4f}")
 
     # 6. 绘图
-    plt.plot(list(range(len(return_list))), return_list)
-    plt.xlabel('Episodes')
-    plt.ylabel('Returns')
-    plt.title('PPO Graph Explainer')
-    plt.show()
-    
+    # plt.plot(list(range(len(return_list))), return_list)
+    # plt.xlabel('Episodes')
+    # plt.ylabel('Returns')
+    # plt.title('PPO Graph Explainer')
+    # plt.show()
+    torch.save(agent.actor.state_dict(), "./params/ppo_actor.pt")
+    torch.save(agent.critic.state_dict(), "./params/ppo_critic.pt")
+    print("Saved PPO model!")
 
-import networkx as nx
-from torch_geometric.utils import to_networkx
+    eval_agent = PPO_Graph(gnn_model, num_labels, hidden_dim, actor_lr, critic_lr, lmbda, epochs, eps, gamma, device)
 
-def visualize_interpretation(agent, loader, device, num_samples=5):
-    """
-    从 loader 中取几个图，运行 Agent，画出原图和被选中的子图
-    """
-    agent.actor.eval() # 切换到评估模式
-    
-    # 从 loader 中获取数据
-    iterator = iter(loader)
-    
-    for i in range(num_samples):
-        try:
-            data = next(iterator)
-        except StopIteration:
-            break
-            
-        data = data.to(device)
-        
-        # === 1. 运行 Agent 进行选边 (与训练逻辑一致) ===
-        num_edges = data.num_edges
-        current_mask = torch.zeros(num_edges, dtype=torch.bool).to(device)
-        
-        # 设定步数 (MUTAG 一般选 5-10 条边)
-        max_steps = 10 
-        
-        print(f"\nSample {i+1}: Graph Label: {data.y.item()}")
-        
-        for t in range(max_steps):
-            # 预测
-            with torch.no_grad():
-                # 注意：take_action 内部可能有 sample，评估时你可能想要 deterministic (argmax)
-                # 但为了看 PPO 的行为，保持 sample 也可以，或者修改 take_action 支持 deterministic
-                action_idx = agent.take_action(data, current_mask)
-            
-            # 更新 Mask
-            current_mask[action_idx] = True
-            
-        # === 2. 打印选中的边 ===
-        selected_indices = torch.nonzero(current_mask).squeeze().cpu().numpy()
-        print(f"Selected Edge Indices: {selected_indices}")
-        
-        # === 3. 画图 ===
-        # 转换为 NetworkX 对象
-        G = to_networkx(data, to_undirected=True)
-        
-        # 设置布局
-        pos = nx.kamada_kawai_layout(G)
-        
-        plt.figure(figsize=(10, 5))
-        
-        # --- 左图：原始图 ---
-        plt.subplot(1, 2, 1)
-        plt.title("Original Graph")
-        nx.draw(G, pos, with_labels=True, node_color='lightblue', edge_color='gray', node_size=300)
-        
-        # --- 右图：解释子图 (高亮选中的边) ---
-        plt.subplot(1, 2, 2)
-        plt.title("Explained Subgraph (Red Edges)")
-        
-        # 先画所有节点和淡色的底边
-        nx.draw_networkx_nodes(G, pos, node_color='lightblue', node_size=300)
-        nx.draw_networkx_labels(G, pos)
-        nx.draw_networkx_edges(G, pos, edge_color='lightgray', alpha=0.5)
-        
-        # 再画选中的边 (红色，加粗)
-        # 注意：PyG 的边是双向的，NetworkX如果是无向图，需要处理一下索引映射
-        # 这里简化处理：将 PyG 选中的边转换为 (u, v) 元组列表
-        edge_index = data.edge_index.cpu().numpy()
-        selected_edges = []
-        
-        # 获取被选中边的 (u, v)
-        if selected_indices.ndim == 0: # 只选了一条边的情况
-             u, v = edge_index[0, selected_indices], edge_index[1, selected_indices]
-             selected_edges.append((u, v))
-        else:
-            for idx in selected_indices:
-                u, v = edge_index[0, idx], edge_index[1, idx]
-                selected_edges.append((u, v))
-        
-        # 在 NetworkX 图中高亮这些边
-        nx.draw_networkx_edges(G, pos, edgelist=selected_edges, edge_color='red', width=2.0)
-        
-        plt.show()
+    eval_agent.actor.load_state_dict(torch.load("./params/ppo_actor.pt", weights_only=True))
+    eval_agent.critic.load_state_dict(torch.load("./params/ppo_critic.pt", weights_only=True))
 
+    eval_agent.actor.eval()
+    eval_agent.critic.eval()
 
-        # ... (之前的训练代码) ...
+    print('ready to plot')
+
+    visualize_interpretation(eval_agent, test_loader, device, num_samples=3)
+
     
-    # 6. 绘图 (Loss/Return 曲线)
-    plt.plot(list(range(len(return_list))), return_list)
-    plt.xlabel('Episodes')
-    plt.ylabel('Returns')
-    plt.title('PPO Graph Explainer')
-    plt.show()
-    
-    # === 新增：可视化结果 ===
-    print("开始可视化解释结果...")
-    # 使用 test_loader 查看测试集的效果
-    visualize_interpretation(agent, test_loader, device, num_samples=3)
 
 
 
-def evaluate_fidelity(agent, loader, gnn_model, device):
-    agent.actor.eval()
-    gnn_model.eval()
-    
-    fidelity_scores = []
-    
-    for data in loader:
-        data = data.to(device)
-        num_edges = data.num_edges
-        current_mask = torch.zeros(num_edges, dtype=torch.bool).to(device)
-        
-        # 1. 原图预测概率
-        with torch.no_grad():
-            full_logits = gnn_model(data.x, data.edge_index, data.edge_attr, data.batch)
-            full_pred = full_logits.argmax(dim=1)
-            full_probs = F.softmax(full_logits, dim=1)
-            original_prob = full_probs[0, full_pred].item()
-        
-        # 2. 选边
-        for _ in range(10): # 假设选10步
-            with torch.no_grad():
-                 action = agent.take_action(data, current_mask)
-                 current_mask[action] = True
-        
-        # 3. 子图预测概率
-        subgraph = relabel_graph(data, current_mask)
-        with torch.no_grad():
-            sub_logits = gnn_model(subgraph.x, subgraph.edge_index, subgraph.edge_attr, subgraph.batch)
-            sub_probs = F.softmax(sub_logits, dim=1)
-            sub_prob = sub_probs[0, full_pred].item() # 看原预测类别的概率变化
-            
-        # Fidelity+ = 原图概率 - 子图概率 (越小越好，说明子图保留了原图的信息)
-        # 或者简单的：Accuracy Drop
-        fidelity_scores.append(original_prob - sub_prob)
-        
-    print(f"Average Fidelity Impact: {np.mean(fidelity_scores):.4f}")
