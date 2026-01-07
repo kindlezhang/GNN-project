@@ -17,7 +17,8 @@ from PPO_copy import *
 from tqdm import tqdm 
 
 # 优先使用 MPS (Mac), 其次 CUDA, 最后 CPU
-device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
+# device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
+
 
 def configuration(dataset_name):
     '''Return dataset-specific configurations.'''
@@ -174,8 +175,6 @@ def visualize_interpretation(agent, loader, device, num_samples=5):
     # # 使用 test_loader 查看测试集的效果
     # visualize_interpretation(agent, test_loader, device, num_samples=3)
 
-
-
 def evaluate_fidelity(agent, loader, gnn_model, device):
     agent.actor.eval()
     gnn_model.eval()
@@ -291,13 +290,14 @@ if __name__ == '__main__':
 
     actor_lr = 1e-3  # 策略网络学习率
     critic_lr = 1e-2  # 价值网络学习率
-    num_episodes = 2  # 训练的总回合数
+    num_episodes = 20  # 训练的总回合数
     hidden_dim = _hidden_size  # 隐藏层维度
     gamma = 0.98  # 折扣因子
     lmbda = 0.95  # GAE 参数
-    epochs = 10  # 每次更新的轮数
+    epochs = 20  # 每次更新的轮数
     eps = 0.2  # PPO 截断范围
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")  # 设备设置（优先使用 GPU）
+    # device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
     gnn_model = model_1
     num_labels = _num_labels
     topK_ratio = topK_ratio 

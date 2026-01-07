@@ -10,7 +10,30 @@ from module.utils.reorganizer import relabel_graph, filter_correct_data, filter_
 from torch_geometric.utils import softmax
 
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+
+# def group_softmax(scores: torch.Tensor, batch_index: torch.Tensor) -> torch.Tensor:
+#     """
+#     类似 torch_geometric.utils.softmax(scores, batch_index)，
+#     但完全用 PyTorch 实现，兼容 MPS。
+    
+#     scores: [num_edges] 或 [num_edges, 1]
+#     batch_index: [num_edges]，每个元素表示该边属于哪个图
+#     """
+#     if scores.dim() == 2 and scores.size(1) == 1:
+#         scores = scores.view(-1)
+
+#     probs = torch.zeros_like(scores)
+#     unique_batches = batch_index.unique()
+
+#     for b in unique_batches:
+#         mask = (batch_index == b)
+#         # 对同一个图里的所有候选边做 softmax
+#         probs[mask] = F.softmax(scores[mask], dim=0)
+
+#     return probs
+
 
 class PolicyNet(nn.Module):
     def __init__(self, gnn_model, num_labels, hidden_size, use_edge_attr=False):
@@ -146,9 +169,6 @@ class PolicyNet(nn.Module):
         # 返回概率和对应的 batch 索引（方便外部知道这些概率属于哪些图）
         return probs, ava_action_batch
 
-
-
-
 class GraphValueNet(nn.Module):
     def __init__(self, gnn_model, hidden_size):
         super(GraphValueNet, self).__init__()
@@ -209,9 +229,6 @@ class GraphValueNet(nn.Module):
         
         return value
     
-
-
-
 def calculate_reward(gnn_model, graph_batch, current_mask, alpha=1.0):
     """
     计算奖励：子图预测分布与全图预测分布的负KL散度
@@ -246,7 +263,7 @@ class PPO_Graph:
         self.device = device
         self.gnn_model = gnn_model
         
-        # 1. 修改初始化，匹配你的 Graph PolicyNet 定义
+        # 1. 修改初始化，匹配 Graph PolicyNet 定义
         self.actor = PolicyNet(gnn_model, num_labels, hidden_dim).to(device)
         self.critic = GraphValueNet(gnn_model, hidden_dim).to(device)
         
